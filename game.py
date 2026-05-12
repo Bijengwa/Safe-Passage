@@ -5,10 +5,15 @@
 A classic puzzle with a modern tkinter GUI.
 No external dependencies — runs with standard Python 3.
 
-✨ NEW FEATURES
-• Winning & losing modals with 'Try Again' button
-• No warnings – you lose only if you make an unsafe crossing
-• ttk modern styling, animated environment
+✨ RULE UPDATE (Lion priority)
+• When the supervisor leaves lion, goat AND grass together on a bank,
+  only the lion eats the goat. The grass survives because:
+    - The lion is faster/stronger.
+    - The grass is placed in the middle with equal distance to both animals.
+    - So the lion reaches and eats the goat before the goat can reach the grass.
+• Other rules remain the same:
+    - Lion + Goat alone (no supervisor, no grass) → Lion eats Goat.
+    - Goat + Grass alone (no supervisor) → Goat eats Grass.
 """
 
 import tkinter as tk
@@ -59,10 +64,22 @@ W, H = 900, 440   # canvas dimensions
 #  GAME LOGIC
 # ══════════════════════════════════════════════
 def check_safety(left, right):
-    """Return (is_safe, message). message explains the loss if any."""
+    """
+    Return (is_safe, message).
+    Check each bank for dangerous combinations when the supervisor is absent.
+    
+    🧠 NEW RULE (lion priority):
+    Because the lion is faster/stronger and the grass is placed between them,
+    if all three (lion, goat, grass) are together without the supervisor,
+    the lion eats the goat first, and the goat never gets a chance to eat the grass.
+    The function checks "lion + goat" first, so it will report that loss
+    and never check "goat + grass". This correctly implements the new behaviour.
+    """
     for bank_side, bank_set in [("left", left), ("right", right)]:
+        # Priority 1: Lion eats goat (all three present? still lion wins)
         if "lion" in bank_set and "goat" in bank_set and "supervisor" not in bank_set:
             return False, f"🦁 Simba atamla mbuzi bila msimamizi upande wa {bank_side}!"
+        # Only checked if no lion+goat danger
         if "goat" in bank_set and "grass" in bank_set and "supervisor" not in bank_set:
             return False, f"🐐 Mbuzi atakula nyasi bila msimamizi upande wa {bank_side}!"
     return True, ""
@@ -104,11 +121,12 @@ class RiverGame(tk.Tk):
     #  STATE
     # ──────────────────────────────────────────
     def _init_state(self):
+        """Initial puzzle state: everything on the left bank."""
         self.left      = {"supervisor", "lion", "goat", "grass"}
         self.right     = set()
         self.moves     = 0
-        self.boat_x    = 290.0
-        self.boat_dest = 290.0
+        self.boat_x    = 290.0   # boat starts on the left side (pixels)
+        self.boat_dest = 290.0   # destination during animation
         self.animating = False
         self.anim_payload = None
         self.game_over = False
@@ -199,10 +217,14 @@ class RiverGame(tk.Tk):
         self.rules_lbl = tk.Label(self, text=(
             "• Simba (🦁) akiachwa na Mbuzi (🐐) bila msimamizi → Simba atamla!\n"
             "• Mbuzi (🐐) akiachwa na Nyasi (🌿) bila msimamizi → Mbuzi atakula!\n"
+            "• Simba, Mbuzi na Nyasi wote pamoja bila msimamizi → Simba atamla Mbuzi\n"
+            "  (Simba ana kasi, Nyasi iko katikati, Mbuzi hafikii Nyasi).\n"
             "• Mashua haiwezi kwenda bila msimamizi.\n"
             "─────────────────────────────────────────────────────────────\n"
             "• Lion + Goat left alone → Lion eats Goat!\n"
             "• Goat + Grass left alone → Goat eats Grass!\n"
+            "• Lion, Goat & Grass together without supervisor → Lion eats Goat\n"
+            "  (Lion is faster, Grass in the middle, Goat can't reach Grass).\n"
             "• The boat won't move without the supervisor."
         ), font=("Helvetica", 9), bg="#0a1520", fg=TEXT_TEAL,
                                   justify="left", padx=12, pady=6)
@@ -211,12 +233,15 @@ class RiverGame(tk.Tk):
     #  HELPERS
     # ──────────────────────────────────────────
     def _sup_side(self):
+        """Return 'left' or 'right' depending on where the supervisor currently is."""
         return "left" if "supervisor" in self.left else "right"
 
     def _bank(self, side):
+        """Return the set of items on the given side ('left' or 'right')."""
         return self.left if side == "left" else self.right
 
     def _other(self, side):
+        """Return the opposite side."""
         return "right" if side == "left" else "left"
 
     def _set_status(self, msg, error=False):
@@ -300,7 +325,7 @@ class RiverGame(tk.Tk):
         bx = self.boat_x
         self._draw_boat(bx, 270, anim_item)
 
-        # ── Bank items (hide if on boat) ──
+        # ── Bank items (hide those that are on the boat or in transit) ──
         left_show  = self.left  - ({"supervisor"} | ({anim_item} if anim_item else set())
                                    if self._sup_side() == "left" else set())
         right_show = self.right - ({"supervisor"} | ({anim_item} if anim_item else set())
@@ -390,14 +415,33 @@ class RiverGame(tk.Tk):
                            font=("Arial", 15))
 
     def _draw_bank_items(self, items, cx):
+        """
+        Draw the set of items on a bank, centred at horizontal position cx.
+        
+        IMPORTANT: If the three items are {lion, goat, grass}, we enforce a
+        special order: LION – GRASS – GOAT, so that the grass is exactly in
+        the middle with equal spacing. This matches the new rule where the
+        lion reaches the goat before the goat can reach the grass.
+        For any other combination, items are sorted alphabetically.
+        """
         if not items:
             return
-        items_list = sorted(items)
+        # Choose the order (list) for drawing.
+        if items == {"lion", "goat", "grass"}:
+            # Custom order: lion on one side, grass in centre, goat on the other
+            items_list = ["lion", "grass", "goat"]
+        else:
+            items_list = sorted(items)   # default alphabetical (goat, grass, lion etc.)
+
         n = len(items_list)
+        # Maximum horizontal space for drawing: 220px (within the bank area)
+        # Spacing between adjacent items is limited to 90px so they don't spread too far.
         spacing = min(90, 220 // max(n, 1))
+        # x0 is the leftmost item coordinate
         x0 = cx - spacing * (n - 1) / 2
 
         for i, item in enumerate(items_list):
+            # Calculate x position: centre of the i-th item
             x = int(x0 + i * spacing)
             y = 240
             col = CHAR_COLORS[item]
@@ -497,6 +541,11 @@ class RiverGame(tk.Tk):
     #  ANIMATION
     # ──────────────────────────────────────────
     def _animate(self, dest_x, on_done, payload=None):
+        """
+        Smoothly move the boat from current boat_x to dest_x.
+        Step size computed as (dest_x - boat_x) / ANIM_STEPS.
+        Each tick moves the boat a fraction and re-renders.
+        """
         self.animating = True
         step_size = (dest_x - self.boat_x) / self.ANIM_STEPS
 
@@ -522,22 +571,26 @@ class RiverGame(tk.Tk):
         sup = self._sup_side()
         dest = self._other(sup)
 
+        # Compute the new state after the move
         new_left  = self.left.copy()
         new_right = self.right.copy()
 
+        # Remove supervisor and cargo from both sides (they are in transit)
         for bank in (new_left, new_right):
             bank.discard("supervisor")
             if cargo:
                 bank.discard(cargo)
 
+        # Place supervisor (and cargo) on the destination bank
         dest_bank = new_right if dest == "right" else new_left
         dest_bank.add("supervisor")
         if cargo:
             dest_bank.add(cargo)
 
-        # Check safety only after the move (for loss)
+        # Check safety of the new state (only loss, no warning)
         ok, msg = check_safety(new_left, new_right)
 
+        # Boat destination pixel (left bank: 290, right bank: 490)
         dest_boat_x = 290.0 if dest == "left" else 490.0
 
         def finalize():
